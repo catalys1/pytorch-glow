@@ -43,6 +43,7 @@ torch.manual_seed(0)
 torch.cuda.manual_seed_all(0)
 
 # loading / dataset preprocessing
+# NOTE: the second transform here is doing the data dequantization
 tf = transforms.Compose([transforms.ToTensor(), 
                          lambda x: x + torch.zeros_like(x).uniform_(0., 1./args.n_bins)])
 
@@ -96,6 +97,10 @@ for epoch in range(start_epoch, args.n_epochs):
         objective = torch.zeros_like(img[:, 0, 0, 0])
 
         # discretizing cost 
+        # NOTE: this is the c term in equation 2 in the paper. When we use
+        # use this with images, we are assuming that the images have been
+        # appropriately dequantized so that they come from a continuous
+        # instead of a discrete distribution.
         objective += float(-np.log(args.n_bins) * np.prod(img.shape[1:]))
         
         # log_det_jacobian cost (and some prior from Split OP)

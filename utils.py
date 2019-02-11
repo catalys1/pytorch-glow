@@ -15,6 +15,7 @@ import os
 def flatten_sum(logps):
     while len(logps.size()) > 1: 
         logps = logps.sum(dim=-1)
+    # logps = logps.view(logps.shape[0], -1).sum(-1)
     return logps
 
 # ------------------------------------------------------------------------------

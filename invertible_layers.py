@@ -6,8 +6,8 @@ import torch.nn.utils.weight_norm as wn
 import numpy as np
 import pdb
 
-from layers import * 
-from utils import * 
+from .layers import * 
+from .utils import * 
 
 # ------------------------------------------------------------------------------
 # Abstract Classes to define common interface for invertible functions
@@ -188,10 +188,10 @@ class Split(Layer):
 
 # Gaussian Prior that's compatible with the Layer framework
 class GaussianPrior(Layer):
-    def __init__(self, input_shape, args):
+    def __init__(self, input_shape, learntop):
         super(GaussianPrior, self).__init__()
         self.input_shape = input_shape
-        if args.learntop: 
+        if learntop: 
             self.conv = Conv2dZeroInit(2 * input_shape[1], 2 * input_shape[1], 3, padding=(3 - 1) // 2)
         else: 
             self.conv = None
@@ -258,7 +258,7 @@ class AffineCoupling(Layer):
         z1, z2 = torch.chunk(x, 2, dim=1)
         h = self.NN(z1)
         shift = h[:, 0::2]
-        scale = F.sigmoid(h[:, 1::2] + 2.)
+        scale = torch.sigmoid(h[:, 1::2] + 2.)
         z2 += shift
         z2 *= scale
         objective += flatten_sum(torch.log(scale))
@@ -269,7 +269,7 @@ class AffineCoupling(Layer):
         z1, z2 = torch.chunk(x, 2, dim=1)
         h = self.NN(z1)
         shift = h[:, 0::2]
-        scale = F.sigmoid(h[:, 1::2] + 2.)
+        scale = torch.sigmoid(h[:, 1::2] + 2.)
         z2 /= scale
         z2 -= shift
         objective -= flatten_sum(torch.log(scale))
@@ -284,47 +284,56 @@ class AffineCoupling(Layer):
 class ActNorm(Layer):
     def __init__(self, num_features, logscale_factor=1., scale=1.):
         super(Layer, self).__init__()
-        self.initialized = False
+        #self.initialized = False
         self.logscale_factor = logscale_factor
         self.scale = scale
         self.register_parameter('b', nn.Parameter(torch.zeros(1, num_features, 1)))
         self.register_parameter('logs', nn.Parameter(torch.zeros(1, num_features, 1)))
+        self.register_buffer('initialized', torch.ByteTensor([0]))
 
     def forward_(self, input, objective):
+        #breakpoint()
         input_shape = input.size()
-        input = input.view(input_shape[0], input_shape[1], -1)
+        input = input.view(*input.shape[:2], -1)
 
-        if not self.initialized: 
-            self.initialized = True
-            unsqueeze = lambda x: x.unsqueeze(0).unsqueeze(-1).detach()
+        if not self.initialized[0]: 
+            with torch.no_grad():
+                self.initialized[0] = 1
+                #self.initialized = True
+                #unsqueeze = lambda x: x.unsqueeze(0).unsqueeze(-1).detach()
 
-            # Compute the mean and variance
-            sum_size = input.size(0) * input.size(-1)
-            input_sum = input.sum(dim=0).sum(dim=-1)
-            b = input_sum / sum_size * -1.
-            vars = ((input - unsqueeze(b)) ** 2).sum(dim=0).sum(dim=1) / sum_size
-            vars = unsqueeze(vars)
-            logs = torch.log(self.scale / torch.sqrt(vars) + 1e-6) / self.logscale_factor
+                # Compute the mean and variance
+                #sum_size = input.size(0) * input.size(-1)
+                #input_sum = input.sum(dim=0).sum(dim=-1)
+                #b = input_sum / sum_size * -1.
+                #vars = ((input - unsqueeze(b)) ** 2).sum(dim=0).sum(dim=1) / sum_size
+                #vars = unsqueeze(vars)
+                t = True
+                b = input.mean(0, keepdim=t).mean(-1, keepdim=t)
+                vars = ((input - b)**2).mean(0, keepdim=t).mean(-1, keepdim=t)
+                logs = torch.log(self.scale / torch.sqrt(vars) + 1e-6)
+                logs[vars == 0] = 0
+                logs = logs / self.logscale_factor 
           
-            self.b.data.copy_(unsqueeze(b).data)
+            self.b.data.copy_(-b.data)  # negative so it centers initially
             self.logs.data.copy_(logs.data)
 
         logs = self.logs * self.logscale_factor
         b = self.b
         
         output = (input + b) * torch.exp(logs)
-        dlogdet = torch.sum(logs) * input.size(-1) # c x h  
+        dlogdet = torch.sum(logs) * input.size(-1)
 
         return output.view(input_shape), objective + dlogdet
 
     def reverse_(self, input, objective):
-        assert self.initialized
+        assert self.initialized[0] == 1
         input_shape = input.size()
         input = input.view(input_shape[0], input_shape[1], -1)
         logs = self.logs * self.logscale_factor
         b = self.b
         output = input * torch.exp(-logs) - b
-        dlogdet = torch.sum(logs) * input.size(-1) # c x h  
+        dlogdet = torch.sum(logs) * input.size(-1)
 
         return output.view(input_shape), objective - dlogdet
 
@@ -337,27 +346,26 @@ class ActNorm(Layer):
 
 # 1 step of the flow (see Figure 2 a) in the original paper)
 class RevNetStep(LayerList):
-    def __init__(self, num_channels, args):
+    def __init__(self, num_channels, norm, permutation, coupling):
         super(RevNetStep, self).__init__()
-        self.args = args
         layers = []
-        if args.norm == 'actnorm': 
+        if norm == 'actnorm': 
             layers += [ActNorm(num_channels)]
         else: 
-            assert not args.norm               
+            assert not norm               
  
-        if args.permutation == 'reverse':
+        if permutation == 'reverse':
             layers += [Reverse(num_channels)]
-        elif args.permutation == 'shuffle': 
+        elif permutation == 'shuffle': 
             layers += [Shuffle(num_channels)]
-        elif args.permutation == 'conv':
+        elif permutation == 'conv':
             layers += [Invertible1x1Conv(num_channels)]
         else: 
             raise ValueError
 
-        if args.coupling == 'additive': 
+        if coupling == 'additive': 
             layers += [AdditiveCoupling(num_channels)]
-        elif args.coupling == 'affine':
+        elif coupling == 'affine':
             layers += [AffineCoupling(num_channels)]
         else: 
             raise ValueError
@@ -367,34 +375,36 @@ class RevNetStep(LayerList):
 
 # Full model
 class Glow_(LayerList, nn.Module):
-    def __init__(self, input_shape, args):
+    def __init__(self, input_shape, n_levels=4, depth=4, batch_size=32,
+                 learntop=True, norm='actnorm', permutation='conv',
+                 coupling='affine'):
         super(Glow_, self).__init__()
         layers = []
         output_shapes = []
         _, C, H, W = input_shape
         
-        for i in range(args.n_levels):
+        for i in range(n_levels):
             # Squeeze Layer 
             layers += [Squeeze(input_shape)]
             C, H, W = C * 4, H // 2, W // 2
             output_shapes += [(-1, C, H, W)]
             
             # RevNet Block
-            layers += [RevNetStep(C, args) for _ in range(args.depth)]
-            output_shapes += [(-1, C, H, W) for _ in range(args.depth)]
+            layers += [RevNetStep(C, norm, permutation, coupling)
+                    for _ in range(depth)]
+            output_shapes += [(-1, C, H, W) for _ in range(depth)]
 
-            if i < args.n_levels - 1: 
+            if i < n_levels - 1: 
                 # Split Layer
                 layers += [Split(output_shapes[-1])]
                 C = C // 2
                 output_shapes += [(-1, C, H, W)]
 
-        layers += [GaussianPrior((args.batch_size, C, H, W), args)]
+        layers += [GaussianPrior((batch_size, C, H, W), learntop)]
         output_shapes += [output_shapes[-1]]
         
         self.layers = nn.ModuleList(layers)
         self.output_shapes = output_shapes
-        self.args = args
         self.flatten()
 
     def forward(self, *inputs):
@@ -418,4 +428,13 @@ class Glow_(LayerList, nn.Module):
         
         self.layers = nn.ModuleList(processed_layers)
 
+    def restore(self):
+        '''Sets the `initialized` state for all ActNorm layers to True'''
+        for l in self.layers:
+            if isinstance(l, AffineCoupling):
+                for ll in l.NN: 
+                    if isinstance(ll, Conv2dActNorm):
+                        ll.actnorm.initialized = True
+            elif isinstance(l, ActNorm):
+                l.initialized = True
     
