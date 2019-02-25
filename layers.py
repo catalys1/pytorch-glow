@@ -14,6 +14,7 @@ class Conv2dZeroInit(nn.Conv2d):
         super().__init__(channels_in, channels_out, filter_size, stride=stride, padding=padding)
         self.register_parameter("logs", nn.Parameter(torch.zeros(channels_out, 1, 1)))
         self.logscale_factor = logscale
+        self.reset_parameters()
 
     def reset_parameters(self):
         self.weight.data.zero_()
@@ -33,6 +34,7 @@ class Conv2dActNorm(nn.Module):
         padding = (filter_size - 1) // 2 or padding
         self.conv = nn.Conv2d(channels_in, channels_out, filter_size, padding=padding, bias=False)
         self.actnorm = ActNorm(channels_out)
+        self.reset_parameters()
 
     def forward(self, x):
         x = self.conv(x)
@@ -43,6 +45,10 @@ class Conv2dActNorm(nn.Module):
 Linear layer zero initialization
 '''
 class LinearZeroInit(nn.Linear):
+    def __init__(self, in_channels, out_channels):
+        super().__init__(in_channels, out_channels)
+        self.reset_parameters()
+
     def reset_parameters(self):
         self.weight.data.fill_(0.)
         self.bias.data.fill_(0.)
@@ -58,3 +64,4 @@ def NN(in_channels, hidden_channels=512, channels_out=None):
         Conv2dActNorm(hidden_channels, hidden_channels, 1, stride=1, padding=0),
         nn.ReLU(inplace=True),
         Conv2dZeroInit(hidden_channels, channels_out, 3, stride=1, padding=1))
+
