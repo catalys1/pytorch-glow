@@ -48,37 +48,6 @@ class LayerList(Layer):
 # Permutation Layers 
 # ------------------------------------------------------------------------------
 
-# Shuffling on the channel axis
-class Shuffle(Layer):
-    def __init__(self, num_channels):
-        super(Shuffle, self).__init__()
-        indices = np.arange(num_channels)
-        np.random.shuffle(indices)
-        rev_indices = np.zeros_like(indices)
-        for i in range(num_channels): 
-            rev_indices[indices[i]] = i
-
-        indices = torch.from_numpy(indices).long()
-        rev_indices = torch.from_numpy(rev_indices).long()
-        self.register_buffer('indices', indices)
-        self.register_buffer('rev_indices', rev_indices)
-        # self.indices, self.rev_indices = indices.cuda(), rev_indices.cuda()
-
-    def forward_(self, x, objective):
-        return x[:, self.indices], objective
-
-    def reverse_(self, x, objective):
-        return x[:, self.rev_indices], objective
-        
-# Reversing on the channel axis
-class Reverse(Shuffle):
-    def __init__(self, num_channels):
-        super(Reverse, self).__init__(num_channels)
-        indices = np.copy(np.arange(num_channels)[::-1])
-        indices = torch.from_numpy(indices).long()
-        self.indices.copy_(indices)
-        self.rev_indices.copy_(indices)
-
 # Invertible 1x1 convolution
 class Invertible1x1Conv(Layer, nn.Conv2d):
     def __init__(self, num_channels):
@@ -231,23 +200,6 @@ class GaussianPrior(Layer):
 # ------------------------------------------------------------------------------
 
 # Additive Coupling Layer
-class AdditiveCoupling(Layer):
-    def __init__(self, num_features):
-        super(AdditiveCoupling, self).__init__()
-        assert num_features % 2 == 0
-        self.NN = NN(num_features // 2)
-
-    def forward_(self, x, objective):
-        z1, z2 = torch.chunk(x, 2, dim=1)
-        z2 += self.NN(z1)
-        return torch.cat([z1, z2], dim=1), objective
-
-    def reverse_(self, x, objective):
-        z1, z2 = torch.chunk(x, 2, dim=1)
-        z2 -= self.NN(z1)
-        return torch.cat([z1, z2], dim=1), objective
-
-# Additive Coupling Layer
 class AffineCoupling(Layer):
     def __init__(self, num_features):
         super(AffineCoupling, self).__init__()
@@ -284,7 +236,6 @@ class AffineCoupling(Layer):
 class ActNorm(Layer):
     def __init__(self, num_features, logscale_factor=1., scale=1.):
         super(Layer, self).__init__()
-        #self.initialized = False
         self.logscale_factor = logscale_factor
         self.scale = scale
         self.register_parameter('b', nn.Parameter(torch.zeros(1, num_features, 1)))
@@ -292,22 +243,12 @@ class ActNorm(Layer):
         self.register_buffer('initialized', torch.ByteTensor([0]))
 
     def forward_(self, input, objective):
-        #breakpoint()
         input_shape = input.size()
         input = input.view(*input.shape[:2], -1)
 
         if not self.initialized[0]: 
             with torch.no_grad():
                 self.initialized[0] = 1
-                #self.initialized = True
-                #unsqueeze = lambda x: x.unsqueeze(0).unsqueeze(-1).detach()
-
-                # Compute the mean and variance
-                #sum_size = input.size(0) * input.size(-1)
-                #input_sum = input.sum(dim=0).sum(dim=-1)
-                #b = input_sum / sum_size * -1.
-                #vars = ((input - unsqueeze(b)) ** 2).sum(dim=0).sum(dim=1) / sum_size
-                #vars = unsqueeze(vars)
                 t = True
                 b = input.mean(0, keepdim=t).mean(-1, keepdim=t)
                 vars = ((input - b)**2).mean(0, keepdim=t).mean(-1, keepdim=t)
@@ -346,7 +287,7 @@ class ActNorm(Layer):
 
 # 1 step of the flow (see Figure 2 a) in the original paper)
 class RevNetStep(LayerList):
-    def __init__(self, num_channels, norm, permutation, coupling):
+    def __init__(self, num_channels, norm):
         super(RevNetStep, self).__init__()
         layers = []
         if norm == 'actnorm': 
@@ -354,21 +295,8 @@ class RevNetStep(LayerList):
         else: 
             assert not norm               
  
-        if permutation == 'reverse':
-            layers += [Reverse(num_channels)]
-        elif permutation == 'shuffle': 
-            layers += [Shuffle(num_channels)]
-        elif permutation == 'conv':
-            layers += [Invertible1x1Conv(num_channels)]
-        else: 
-            raise ValueError
-
-        if coupling == 'additive': 
-            layers += [AdditiveCoupling(num_channels)]
-        elif coupling == 'affine':
-            layers += [AffineCoupling(num_channels)]
-        else: 
-            raise ValueError
+        layers += [Invertible1x1Conv(num_channels)]
+        layers += [AffineCoupling(num_channels)]
 
         self.layers = nn.ModuleList(layers)
 
@@ -376,8 +304,7 @@ class RevNetStep(LayerList):
 # Full model
 class Glow_(LayerList, nn.Module):
     def __init__(self, input_shape, n_levels=4, depth=4, batch_size=32,
-                 learntop=True, norm='actnorm', permutation='conv',
-                 coupling='affine'):
+                 learntop=True, norm='actnorm'):
         super(Glow_, self).__init__()
         layers = []
         output_shapes = []
@@ -390,8 +317,7 @@ class Glow_(LayerList, nn.Module):
             output_shapes += [(-1, C, H, W)]
             
             # RevNet Block
-            layers += [RevNetStep(C, norm, permutation, coupling)
-                    for _ in range(depth)]
+            layers += [RevNetStep(C, norm) for _ in range(depth)]
             output_shapes += [(-1, C, H, W) for _ in range(depth)]
 
             if i < n_levels - 1: 
@@ -428,13 +354,3 @@ class Glow_(LayerList, nn.Module):
         
         self.layers = nn.ModuleList(processed_layers)
 
-    def restore(self):
-        '''Sets the `initialized` state for all ActNorm layers to True'''
-        for l in self.layers:
-            if isinstance(l, AffineCoupling):
-                for ll in l.NN: 
-                    if isinstance(ll, Conv2dActNorm):
-                        ll.actnorm.initialized = True
-            elif isinstance(l, ActNorm):
-                l.initialized = True
-    
