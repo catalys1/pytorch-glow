@@ -34,7 +34,6 @@ class Conv2dActNorm(nn.Module):
         padding = (filter_size - 1) // 2 or padding
         self.conv = nn.Conv2d(channels_in, channels_out, filter_size, padding=padding, bias=False)
         self.actnorm = ActNorm(channels_out)
-        self.reset_parameters()
 
     def forward(self, x):
         x = self.conv(x)
