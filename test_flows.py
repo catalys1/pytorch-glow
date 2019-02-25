@@ -19,32 +19,6 @@ W = 48
 
 
 class TestFlow(unittest.TestCase):
-    def test_shuffle(self):
-        x = torch.randn(BATCH_SIZE, NUM_CHANNELS, H, W)
-        layer = Shuffle(NUM_CHANNELS)
-        log_det = torch.randn(BATCH_SIZE)
-
-        y, inv_log_det = layer.forward_(x.clone(), log_det.clone())
-        x_, log_det_   = layer.reverse_(y.clone(), inv_log_det.clone())
-
-        self.assertTrue((log_det_ - log_det).abs().max() < EPS, 
-                        'Shuffle Layer det is not zero.')
-
-        self.assertTrue((x - x_).abs().max() < EPS, 'Shuffle Layer is wrong')
-
-    def test_reverse(self):
-        x = torch.randn(BATCH_SIZE, NUM_CHANNELS, H, W)
-        layer = Reverse(NUM_CHANNELS)
-        log_det = torch.randn(BATCH_SIZE)
-
-        y, inv_log_det = layer.forward_(x.clone(), log_det.clone())
-        x_, log_det_   = layer.reverse_(y.clone(), inv_log_det.clone())
-
-        self.assertTrue((log_det_ - log_det).abs().max() < EPS, 
-                        'Shuffle Layer det is not zero.')
-
-        self.assertTrue((x - x_).abs().max() < EPS, 'Shuffle Layer is wrong')
-
     def test_conv(self):
         x = torch.randn(BATCH_SIZE, NUM_CHANNELS, H, W)
         layer = Invertible1x1Conv(NUM_CHANNELS)
@@ -58,6 +32,7 @@ class TestFlow(unittest.TestCase):
 
         self.assertTrue((x - x_).abs().max() < EPS, 'Conv Layer is wrong')
         self.assertTrue((log_det - inv_log_det).abs().max() > 0.01 * EPS, 'Determinant was not changed!')        
+
     def test_squeeze(self):
         x = torch.randn(BATCH_SIZE, NUM_CHANNELS, H, W)
         layer = Squeeze([int(y) for y in x.size()])
@@ -84,18 +59,6 @@ class TestFlow(unittest.TestCase):
 
         self.assertTrue((x - x_).abs().max() < EPS, 'Squeeze Layer is wrong')
         self.assertTrue((log_det - inv_log_det).abs().max() > EPS, 'Determinant was not changed!')        
-    def test_add(self):
-        x = torch.randn(BATCH_SIZE, NUM_CHANNELS, H, W)
-        layer = AdditiveCoupling(NUM_CHANNELS)
-        log_det = torch.randn(BATCH_SIZE)
-
-        y, inv_log_det = layer.forward_(x.clone(), log_det.clone())
-        x_, log_det_   = layer.reverse_(y.clone(), inv_log_det.clone())
-
-        self.assertTrue((log_det_ - log_det).abs().max() < EPS, 
-                        'Additive Coupling Layer det is not zero.')
-
-        self.assertTrue((x - x_).abs().max() < EPS, 'Additive Coupling Layer is wrong')
 
     def test_affine(self):
         x = torch.randn(BATCH_SIZE, NUM_CHANNELS, H, W)
@@ -117,7 +80,6 @@ class TestFlow(unittest.TestCase):
         layer = ActNorm(NUM_CHANNELS)
         log_det = torch.randn(BATCH_SIZE)
 
-        # import pdb; pdb.set_trace()
         y, inv_log_det = layer.forward_(x.clone(), log_det.clone())
         x_, log_det_   = layer.reverse_(y.clone(), inv_log_det.clone())
 
@@ -128,6 +90,6 @@ class TestFlow(unittest.TestCase):
         self.assertTrue((log_det - inv_log_det).abs().max() > EPS, 'determinant was not changed!')        
 
 
-
 if __name__ == '__main__':
     unittest.main()
+
