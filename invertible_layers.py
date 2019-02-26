@@ -163,9 +163,13 @@ class Split(Layer):
 
 # Gaussian Prior that's compatible with the Layer framework
 class GaussianPrior(Layer):
-    def __init__(self, input_shape, learntop):
+    def __init__(self, input_shape, ydim=None):
         super(GaussianPrior, self).__init__()
         self.input_shape = input_shape
+
+        #if ydim is not None:
+        #    c = self.input_shape[1]
+        #    self.mean_select = torch.nn.Linear(ydim, c)
 
     def forward_(self, x, objective):
         #mean_and_logsd = torch.cat([torch.zeros_like(x) for _ in range(2)], dim=1)
@@ -195,7 +199,7 @@ class GaussianPrior(Layer):
         #objective -= pz.logp(z)
         z = x
         if x is None:
-            z = torch.zeros(*self.input_shape, device='cuda')
+            z = standard_normal_sample(self.input_shape)
         objective -= standard_normal_logp(z)
 
         # this way, you can encode and decode back the same image. 
@@ -206,7 +210,7 @@ class GaussianPrior(Layer):
 # Coupling Layers
 # ------------------------------------------------------------------------------
 
-# Additive Coupling Layer
+# Affine Coupling Layer
 class AffineCoupling(Layer):
     def __init__(self, num_features):
         super(AffineCoupling, self).__init__()
