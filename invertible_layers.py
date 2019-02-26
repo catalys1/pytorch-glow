@@ -18,10 +18,10 @@ class Layer(nn.Module):
     def __init__(self):
         super(Layer, self).__init__()
 
-    def forward_(self, x, objective):
+    def forward_(self, x, objective, y=None):
         raise NotImplementedError
 
-    def reverse_(self, y, objective):
+    def reverse_(self, x, objective, y=None):
         raise NotImplementedError
 
 # Wrapper for stacking multiple layers 
@@ -33,14 +33,14 @@ class LayerList(Layer):
     def __getitem__(self, i):
         return self.layers[i]
 
-    def forward_(self, x, objective):
+    def forward_(self, x, objective, y=None):
         for layer in self.layers:
-            x, objective = layer.forward_(x, objective)
+            x, objective = layer.forward_(x, objective, y=y)
         return x, objective
 
-    def reverse_(self, x, objective):
+    def reverse_(self, x, objective, y=None):
         for layer in reversed(self.layers): 
-            x, objective = layer.reverse_(x, objective)
+            x, objective = layer.reverse_(x, objective, y=y)
         return x, objective
 
 
@@ -61,7 +61,7 @@ class Invertible1x1Conv(Layer, nn.Conv2d):
         w_init = w_init.unsqueeze(-1).unsqueeze(-1)
         self.weight.data.copy_(w_init)
 
-    def forward_(self, x, objective):
+    def forward_(self, x, objective, y=None):
         dlogdet = torch.det(self.weight.squeeze()).abs().log() * x.size(-2) * x.size(-1) 
         objective += dlogdet
         output = F.conv2d(x, self.weight, self.bias, self.stride, self.padding, \
@@ -69,7 +69,7 @@ class Invertible1x1Conv(Layer, nn.Conv2d):
  
         return output, objective
 
-    def reverse_(self, x, objective):
+    def reverse_(self, x, objective, y=None):
         dlogdet = torch.det(self.weight.squeeze()).abs().log() * x.size(-2) * x.size(-1) 
         objective -= dlogdet
         weight_inv = torch.inverse(self.weight.squeeze()).unsqueeze(-1).unsqueeze(-1)
@@ -111,13 +111,13 @@ class Squeeze(Layer):
         x = x.view(bs, c // self.factor ** 2, h * self.factor, w * self.factor)
         return x
     
-    def forward_(self, x, objective):
+    def forward_(self, x, objective, y=None):
         if len(x.size()) != 4: 
             raise NotImplementedError # Maybe ValueError would be more appropriate
 
         return self.squeeze_bchw(x), objective
         
-    def reverse_(self, x, objective):
+    def reverse_(self, x, objective, y=None):
         if len(x.size()) != 4: 
             raise NotImplementedError
 
@@ -135,12 +135,12 @@ class Split(Layer):
         bs, c, h, w = input_shape
         self.conv_zero = Conv2dZeroInit(c // 2, c, 3, padding=(3 - 1) // 2)
 
-    def split2d_prior(self, x):
+    def split2d_prior(self, x, y=None):
         h = self.conv_zero(x)
         mean, logs = h[:, 0::2], h[:, 1::2]
         return gaussian_diag(mean, logs)
 
-    def forward_(self, x, objective):
+    def forward_(self, x, objective, y=None):
         bs, c, h, w = x.size()
         z1, z2 = torch.chunk(x, 2, dim=1)
         #pz = self.split2d_prior(z1)
@@ -149,7 +149,7 @@ class Split(Layer):
         self.sample = z2
         return z1, objective
 
-    def reverse_(self, x, objective, use_stored_sample=False):
+    def reverse_(self, x, objective, use_stored_sample=False, y=None):
         #pz = self.split2d_prior(x)
         #z2 = self.sample if use_stored_sample else pz.sample() 
         if use_stored_sample:
@@ -166,41 +166,35 @@ class GaussianPrior(Layer):
     def __init__(self, input_shape, ydim=None):
         super(GaussianPrior, self).__init__()
         self.input_shape = input_shape
+        self.ydim = ydim
 
-        #if ydim is not None:
-        #    c = self.input_shape[1]
-        #    self.mean_select = torch.nn.Linear(ydim, c)
+        if ydim is not None:
+            c, h, w = self.input_shape[1:]
+            self.mean_select = LinearZeroInit(ydim, c * h * w)
 
-    def forward_(self, x, objective):
-        #mean_and_logsd = torch.cat([torch.zeros_like(x) for _ in range(2)], dim=1)
-        #
-        #if self.conv: 
-        #    mean_and_logsd = self.conv(mean_and_logsd)
-
-        #mean, logsd = torch.chunk(mean_and_logsd, 2, dim=1)
-
-        #pz = gaussian_diag(mean, logsd)
-        #objective += pz.logp(x) 
-        objective += standard_normal_logp(x)
+    def forward_(self, x, objective, y=None):
+        if y is not None:
+            y = onehot(y, self.ydim)
+            mean = self.mean_select(y).view(-1, *self.input_shape[1:])
+            objective += gaussian_shift_logp(x, mean)
+        else:
+            objective += standard_normal_logp(x)
 
         # this way, you can encode and decode back the same image. 
         return x, objective
 
-    def reverse_(self, x, objective):
-        #bs, c, h, w = self.input_shape
-        #mean_and_logsd = torch.cuda.FloatTensor(bs, 2 * c, h, w).fill_(0.)
-        #
-        #if self.conv: 
-        #    mean_and_logsd = self.conv(mean_and_logsd)
-
-        #mean, logsd = torch.chunk(mean_and_logsd, 2, dim=1)
-        #pz = gaussian_diag(mean, logsd)
-        #z = pz.sample() if x is None else x
-        #objective -= pz.logp(z)
-        z = x
-        if x is None:
+    def reverse_(self, x, objective, y=None):
+        if y is not None:
+            y = onehot(y, self.ydim)
+            mean = self.mean_select(y).view(-1, *self.input_shape[1:])
+            z = gaussian_shift_sample(mean)
+            objective -= gaussian_shift_logp(z, mean)
+        elif x is None:
             z = standard_normal_sample(self.input_shape)
-        objective -= standard_normal_logp(z)
+            objective -= standard_normal_logp(z)
+        else:
+            z = x
+            objective -= standard_normal_logp(z)
 
         # this way, you can encode and decode back the same image. 
         return z, objective
@@ -217,7 +211,7 @@ class AffineCoupling(Layer):
         # assert num_features % 2 == 0
         self.NN = NN(num_features // 2, channels_out=num_features)
 
-    def forward_(self, x, objective):
+    def forward_(self, x, objective, y=None):
         z1, z2 = torch.chunk(x, 2, dim=1)
         h = self.NN(z1)
         shift = h[:, 0::2]
@@ -228,7 +222,7 @@ class AffineCoupling(Layer):
 
         return torch.cat([z1, z2], dim=1), objective
 
-    def reverse_(self, x, objective):
+    def reverse_(self, x, objective, y=None):
         z1, z2 = torch.chunk(x, 2, dim=1)
         h = self.NN(z1)
         shift = h[:, 0::2]
@@ -253,7 +247,7 @@ class ActNorm(Layer):
         self.register_parameter('logs', nn.Parameter(torch.zeros(1, num_features, 1)))
         self.register_buffer('initialized', torch.ByteTensor([0]))
 
-    def forward_(self, input, objective):
+    def forward_(self, input, objective, y=None):
         input_shape = input.size()
         input = input.view(*input.shape[:2], -1)
 
@@ -278,7 +272,7 @@ class ActNorm(Layer):
 
         return output.view(input_shape), objective + dlogdet
 
-    def reverse_(self, input, objective):
+    def reverse_(self, input, objective, y=None):
         assert self.initialized[0] == 1
         input_shape = input.size()
         input = input.view(input_shape[0], input_shape[1], -1)
@@ -312,10 +306,23 @@ class RevNetStep(LayerList):
         self.layers = nn.ModuleList(layers)
 
 
+class ClassPredict(nn.Module):
+    def __init__(self, in_channels, out_dim):
+        super(ClassPredict, self).__init__()
+        self.linear = nn.Linear(in_channels, out_dim)
+        torch.nn.init.normal_(self.linear.weight, std=0.03)
+
+    def forward(self, x):
+        x = nn.functional.adaptive_avg_pool2d(x, 1)
+        x = x.view(x.shape[0], -1)
+        x = self.linear(x)
+        return x
+
+
 # Full model
 class Glow_(LayerList, nn.Module):
     def __init__(self, input_shape, n_levels=4, depth=4, batch_size=32,
-                 learntop=True, norm='actnorm'):
+                 ydim=None, norm='actnorm'):
         super(Glow_, self).__init__()
         layers = []
         output_shapes = []
@@ -337,19 +344,26 @@ class Glow_(LayerList, nn.Module):
                 C = C // 2
                 output_shapes += [(-1, C, H, W)]
 
-        layers += [GaussianPrior((batch_size, C, H, W), learntop)]
+        layers += [GaussianPrior((batch_size, C, H, W), ydim=ydim)]
         output_shapes += [output_shapes[-1]]
+
+        if ydim is None:
+            self.classifier = lambda x: None
+        else:
+            self.classifier = ClassPredict(output_shapes[-1][1], ydim)
         
         self.layers = nn.ModuleList(layers)
         self.output_shapes = output_shapes
         self.flatten()
 
     def forward(self, *inputs):
-        return self.forward_(*inputs)
+        x, obj = self.forward_(*inputs)
+        clss = self.classifier(x)
+        return x, obj, clss
 
-    def sample(self):
+    def sample(self, y=None):
         with torch.no_grad():
-            samples = self.reverse_(None, 0.)[0]
+            samples = self.reverse_(None, 0., y)[0]
             return samples
 
     def flatten(self):
