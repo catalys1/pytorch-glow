@@ -15,12 +15,16 @@ import os
 
 Log2PI = float(np.log(2 * np.pi))
 
+
 def flatten_sum(logps):
-    #while len(logps.size()) > 1: 
-    #    logps = logps.sum(dim=-1)
     logps = logps.view(logps.shape[0], -1).sum(-1)
     return logps
 
+
+def onehot(x, n):
+    v = torch.zeros(x.size()[0], n, device=x.device)
+    v.scatter_(1, x.view(-1, 1), 1)
+    return v
 
 # ------------------------------------------------------------------------------
 # Distributions
