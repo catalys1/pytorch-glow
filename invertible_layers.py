@@ -143,16 +143,21 @@ class Split(Layer):
     def forward_(self, x, objective):
         bs, c, h, w = x.size()
         z1, z2 = torch.chunk(x, 2, dim=1)
-        pz = self.split2d_prior(z1)
+        #pz = self.split2d_prior(z1)
+        #objective += pz.logp(z2) 
+        objective += standard_normal_logp(z2)
         self.sample = z2
-        objective += pz.logp(z2) 
         return z1, objective
 
     def reverse_(self, x, objective, use_stored_sample=False):
-        pz = self.split2d_prior(x)
-        z2 = self.sample if use_stored_sample else pz.sample() 
+        #pz = self.split2d_prior(x)
+        #z2 = self.sample if use_stored_sample else pz.sample() 
+        z2 = self.sample
+        if not use_stored_sample:
+            z2 = standard_normal_sample(z.size(), z.device)
         z = torch.cat([x, z2], dim=1)
-        objective -= pz.logp(z2) 
+        #objective -= pz.logp(z2) 
+        objective -= standard_normal_logp(z2)
         return z, objective
 
 # Gaussian Prior that's compatible with the Layer framework
@@ -160,36 +165,37 @@ class GaussianPrior(Layer):
     def __init__(self, input_shape, learntop):
         super(GaussianPrior, self).__init__()
         self.input_shape = input_shape
-        if learntop: 
-            self.conv = Conv2dZeroInit(2 * input_shape[1], 2 * input_shape[1], 3, padding=(3 - 1) // 2)
-        else: 
-            self.conv = None
 
     def forward_(self, x, objective):
-        mean_and_logsd = torch.cat([torch.zeros_like(x) for _ in range(2)], dim=1)
-        
-        if self.conv: 
-            mean_and_logsd = self.conv(mean_and_logsd)
+        #mean_and_logsd = torch.cat([torch.zeros_like(x) for _ in range(2)], dim=1)
+        #
+        #if self.conv: 
+        #    mean_and_logsd = self.conv(mean_and_logsd)
 
-        mean, logsd = torch.chunk(mean_and_logsd, 2, dim=1)
+        #mean, logsd = torch.chunk(mean_and_logsd, 2, dim=1)
 
-        pz = gaussian_diag(mean, logsd)
-        objective += pz.logp(x) 
+        #pz = gaussian_diag(mean, logsd)
+        #objective += pz.logp(x) 
+        objective += standard_normal_logp(x)
 
         # this way, you can encode and decode back the same image. 
         return x, objective
 
     def reverse_(self, x, objective):
-        bs, c, h, w = self.input_shape
-        mean_and_logsd = torch.cuda.FloatTensor(bs, 2 * c, h, w).fill_(0.)
-        
-        if self.conv: 
-            mean_and_logsd = self.conv(mean_and_logsd)
+        #bs, c, h, w = self.input_shape
+        #mean_and_logsd = torch.cuda.FloatTensor(bs, 2 * c, h, w).fill_(0.)
+        #
+        #if self.conv: 
+        #    mean_and_logsd = self.conv(mean_and_logsd)
 
-        mean, logsd = torch.chunk(mean_and_logsd, 2, dim=1)
-        pz = gaussian_diag(mean, logsd)
-        z = pz.sample() if x is None else x
-        objective -= pz.logp(z)
+        #mean, logsd = torch.chunk(mean_and_logsd, 2, dim=1)
+        #pz = gaussian_diag(mean, logsd)
+        #z = pz.sample() if x is None else x
+        #objective -= pz.logp(z)
+        z = x
+        if x in None:
+            z = torch.zeros(*input_shape, device='cuda')
+        objective -= standard_normal_logp(z)
 
         # this way, you can encode and decode back the same image. 
         return z, objective

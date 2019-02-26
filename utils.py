@@ -30,18 +30,13 @@ def onehot(x, n):
 # Distributions
 # ------------------------------------------------------------------------------
 
-def standard_normal(shape, device='cuda'):
-    class Normal(object):
-        def logps(x):
-            return -0.5 * (Log2PI + x**2)
+def standard_normal_logp(x):
+    return flatten_sum(-0.5 * (Log2PI + x**2))
 
-        def sample():
-            s = torch.empty(shape, device=device).normal_(mean=0, std=1)
 
-        def logp(x):
-            flatten_sum(self.logps(x))
-
-    return Normal
+def standard_normal_sample(shape, device='cuda'):
+    s = torch.empty(shape, device=device).normal_(mean=0, std=1)
+    return s
 
 
 def standard_gaussian(shape):
