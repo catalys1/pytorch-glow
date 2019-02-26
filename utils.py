@@ -31,11 +31,29 @@ def onehot(x, n):
 # ------------------------------------------------------------------------------
 
 def standard_normal_logp(x):
+    '''Calculate probability of x under a zero mean, identity covariance 
+    multivariate normal distribution'''
     return flatten_sum(-0.5 * (Log2PI + x**2))
 
 
 def standard_normal_sample(shape, device='cuda'):
+    '''Sample from a multivariate normal distribution with zero mean and
+    identity covariance'''
     s = torch.empty(shape, device=device).normal_(mean=0, std=1)
+    return s
+
+
+def gaussian_shift_logp(x, mean):
+    '''Calculate the probability of x under a multivariate normal with
+    mean `mean` and identity covariance'''
+    return flatten_sum(-0.5 * (Log2PI + ((x - mean)**2)))
+
+
+def gaussian_shift_sample(mean):
+    '''Sample from  a multivariate normal with mean `mean` and identity
+    covariance'''
+    s = torch.empty_like(mean)
+    s = torch.normal(mean=mean, std=1, out=s)
     return s
 
 
