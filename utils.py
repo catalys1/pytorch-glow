@@ -21,6 +21,7 @@ def flatten_sum(logps):
     return logps
 
 
+@torch.no_grad()
 def onehot(x, n):
     v = torch.zeros(x.size()[0], n, device=x.device)
     v.scatter_(1, x.view(-1, 1), 1)
