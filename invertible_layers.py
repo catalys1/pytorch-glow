@@ -152,9 +152,10 @@ class Split(Layer):
     def reverse_(self, x, objective, use_stored_sample=False):
         #pz = self.split2d_prior(x)
         #z2 = self.sample if use_stored_sample else pz.sample() 
-        z2 = self.sample
-        if not use_stored_sample:
-            z2 = standard_normal_sample(z.size(), z.device)
+        if use_stored_sample:
+            z2 = self.sample
+        else:
+            z2 = standard_normal_sample(x.size(), x.device)
         z = torch.cat([x, z2], dim=1)
         #objective -= pz.logp(z2) 
         objective -= standard_normal_logp(z2)
@@ -193,8 +194,8 @@ class GaussianPrior(Layer):
         #z = pz.sample() if x is None else x
         #objective -= pz.logp(z)
         z = x
-        if x in None:
-            z = torch.zeros(*input_shape, device='cuda')
+        if x is None:
+            z = torch.zeros(*self.input_shape, device='cuda')
         objective -= standard_normal_logp(z)
 
         # this way, you can encode and decode back the same image. 
