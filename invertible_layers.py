@@ -18,10 +18,10 @@ class Layer(nn.Module):
     def __init__(self):
         super(Layer, self).__init__()
 
-    def forward_(self, x, objective, y=None):
+    def forward_(self, x, objective, y=None, **kwargs):
         raise NotImplementedError
 
-    def reverse_(self, x, objective, y=None):
+    def reverse_(self, x, objective, y=None, **kwargs):
         raise NotImplementedError
 
 # Wrapper for stacking multiple layers 
@@ -33,14 +33,14 @@ class LayerList(Layer):
     def __getitem__(self, i):
         return self.layers[i]
 
-    def forward_(self, x, objective, y=None):
+    def forward_(self, x, objective, y=None, **kwargs):
         for layer in self.layers:
-            x, objective = layer.forward_(x, objective, y=y)
+            x, objective = layer.forward_(x, objective, y=y, **kwargs)
         return x, objective
 
-    def reverse_(self, x, objective, y=None):
+    def reverse_(self, x, objective, y=None, **kwargs):
         for layer in reversed(self.layers): 
-            x, objective = layer.reverse_(x, objective, y=y)
+            x, objective = layer.reverse_(x, objective, y=y, **kwargs)
         return x, objective
 
 
@@ -61,7 +61,7 @@ class Invertible1x1Conv(Layer, nn.Conv2d):
         w_init = w_init.unsqueeze(-1).unsqueeze(-1)
         self.weight.data.copy_(w_init)
 
-    def forward_(self, x, objective, y=None):
+    def forward_(self, x, objective, y=None, **kwargs):
         dlogdet = torch.det(self.weight.squeeze()).abs().log() * x.size(-2) * x.size(-1) 
         objective += dlogdet
         output = F.conv2d(x, self.weight, self.bias, self.stride, self.padding, \
@@ -69,7 +69,7 @@ class Invertible1x1Conv(Layer, nn.Conv2d):
  
         return output, objective
 
-    def reverse_(self, x, objective, y=None):
+    def reverse_(self, x, objective, y=None, **kwargs):
         dlogdet = torch.det(self.weight.squeeze()).abs().log() * x.size(-2) * x.size(-1) 
         objective -= dlogdet
         weight_inv = torch.inverse(self.weight.squeeze()).unsqueeze(-1).unsqueeze(-1)
@@ -111,13 +111,13 @@ class Squeeze(Layer):
         x = x.view(bs, c // self.factor ** 2, h * self.factor, w * self.factor)
         return x
     
-    def forward_(self, x, objective, y=None):
+    def forward_(self, x, objective, y=None, **kwargs):
         if len(x.size()) != 4: 
             raise NotImplementedError # Maybe ValueError would be more appropriate
 
         return self.squeeze_bchw(x), objective
         
-    def reverse_(self, x, objective, y=None):
+    def reverse_(self, x, objective, y=None, **kwargs):
         if len(x.size()) != 4: 
             raise NotImplementedError
 
@@ -135,29 +135,26 @@ class Split(Layer):
         bs, c, h, w = input_shape
         self.conv_zero = Conv2dZeroInit(c // 2, c, 3, padding=(3 - 1) // 2)
 
-    def split2d_prior(self, x, y=None):
+    def split2d_prior(self, x, y=None, **kwargs):
         h = self.conv_zero(x)
         mean, logs = h[:, 0::2], h[:, 1::2]
         return gaussian_diag(mean, logs)
 
-    def forward_(self, x, objective, y=None):
+    def forward_(self, x, objective, y=None, **kwargs):
         bs, c, h, w = x.size()
         z1, z2 = torch.chunk(x, 2, dim=1)
-        #pz = self.split2d_prior(z1)
-        #objective += pz.logp(z2) 
         objective += standard_normal_logp(z2)
         self.sample = z2
         return z1, objective
 
-    def reverse_(self, x, objective, use_stored_sample=False, y=None):
-        #pz = self.split2d_prior(x)
-        #z2 = self.sample if use_stored_sample else pz.sample() 
+    def reverse_(self, x, objective, y=None, **kwargs):
+        std = kwargs.get('std', 1)
+        use_stored_sample = kwargs.get('use_stored_sample', False)
         if use_stored_sample:
             z2 = self.sample
         else:
-            z2 = standard_normal_sample(x.size(), x.device)
+            z2 = standard_normal_sample(x.size(), std=std, device=x.device)
         z = torch.cat([x, z2], dim=1)
-        #objective -= pz.logp(z2) 
         objective -= standard_normal_logp(z2)
         return z, objective
 
@@ -172,7 +169,7 @@ class GaussianPrior(Layer):
             c, h, w = self.input_shape[1:]
             self.mean_select = LinearZeroInit(ydim, c * h * w)
 
-    def forward_(self, x, objective, y=None):
+    def forward_(self, x, objective, y=None, **kwargs):
         if y is not None:
             y = onehot(y, self.ydim)
             mean = self.mean_select(y).view(-1, *self.input_shape[1:])
@@ -183,14 +180,15 @@ class GaussianPrior(Layer):
         # this way, you can encode and decode back the same image. 
         return x, objective
 
-    def reverse_(self, x, objective, y=None):
+    def reverse_(self, x, objective, y=None, **kwargs):
+        std = kwargs.get('std', 1)
         if y is not None:
             y = onehot(y, self.ydim)
             mean = self.mean_select(y).view(-1, *self.input_shape[1:])
-            z = gaussian_shift_sample(mean)
+            z = gaussian_shift_sample(mean, std=std)
             objective -= gaussian_shift_logp(z, mean)
         elif x is None:
-            z = standard_normal_sample(self.input_shape)
+            z = standard_normal_sample(self.input_shape, std=std)
             objective -= standard_normal_logp(z)
         else:
             z = x
@@ -211,7 +209,7 @@ class AffineCoupling(Layer):
         # assert num_features % 2 == 0
         self.NN = NN(num_features // 2, channels_out=num_features)
 
-    def forward_(self, x, objective, y=None):
+    def forward_(self, x, objective, y=None, **kwargs):
         z1, z2 = torch.chunk(x, 2, dim=1)
         h = self.NN(z1)
         shift = h[:, 0::2]
@@ -222,7 +220,7 @@ class AffineCoupling(Layer):
 
         return torch.cat([z1, z2], dim=1), objective
 
-    def reverse_(self, x, objective, y=None):
+    def reverse_(self, x, objective, y=None, **kwargs):
         z1, z2 = torch.chunk(x, 2, dim=1)
         h = self.NN(z1)
         shift = h[:, 0::2]
@@ -247,7 +245,7 @@ class ActNorm(Layer):
         self.register_parameter('logs', nn.Parameter(torch.zeros(1, num_features, 1)))
         self.register_buffer('initialized', torch.ByteTensor([0]))
 
-    def forward_(self, input, objective, y=None):
+    def forward_(self, input, objective, y=None, **kwargs):
         input_shape = input.size()
         input = input.view(*input.shape[:2], -1)
 
@@ -272,7 +270,7 @@ class ActNorm(Layer):
 
         return output.view(input_shape), objective + dlogdet
 
-    def reverse_(self, input, objective, y=None):
+    def reverse_(self, input, objective, y=None, **kwargs):
         assert self.initialized[0] == 1
         input_shape = input.size()
         input = input.view(input_shape[0], input_shape[1], -1)
@@ -356,14 +354,15 @@ class Glow_(LayerList, nn.Module):
         self.output_shapes = output_shapes
         self.flatten()
 
-    def forward(self, *inputs):
-        x, obj = self.forward_(*inputs)
+    def forward(self, *inputs, **kwargs):
+        x, obj = self.forward_(*inputs, **kwargs)
         clss = self.classifier(x)
         return x, obj, clss
 
-    def sample(self, y=None):
+    def sample(self, y=None, std=None):
         with torch.no_grad():
-            samples = self.reverse_(None, 0., y)[0]
+            kwargs = {'std': std} if std is not None else {}
+            samples = self.reverse_(None, 0., y, **kwargs)[0]
             return samples
 
     def flatten(self):

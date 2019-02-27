@@ -37,10 +37,10 @@ def standard_normal_logp(x):
     return flatten_sum(-0.5 * (Log2PI + x**2))
 
 
-def standard_normal_sample(shape, device='cuda'):
+def standard_normal_sample(shape, std=1, device='cuda'):
     '''Sample from a multivariate normal distribution with zero mean and
     identity covariance'''
-    s = torch.empty(shape, device=device).normal_(mean=0, std=1)
+    s = torch.empty(shape, device=device).normal_(mean=0, std=std)
     return s
 
 
@@ -50,11 +50,11 @@ def gaussian_shift_logp(x, mean):
     return flatten_sum(-0.5 * (Log2PI + ((x - mean)**2)))
 
 
-def gaussian_shift_sample(mean):
+def gaussian_shift_sample(mean, std=1):
     '''Sample from  a multivariate normal with mean `mean` and identity
     covariance'''
     s = torch.empty_like(mean)
-    s = torch.normal(mean=mean, std=1, out=s)
+    s = torch.normal(mean=mean, std=std, out=s)
     return s
 
 
