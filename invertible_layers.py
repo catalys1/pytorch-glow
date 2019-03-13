@@ -365,6 +365,11 @@ class Glow_(LayerList, nn.Module):
             samples = self.reverse_(None, 0., y, **kwargs)[0]
             return samples
 
+    def sample_with_grad(self, y, std=None):
+        kwargs = {'std': std} if std is not None else {}
+        samples = self.reverse_(None, 0., y, **kwargs)[0]
+        return samples
+
     def flatten(self):
         # flattens the list of layers to avoid recursive call every time. 
         processed_layers = []
